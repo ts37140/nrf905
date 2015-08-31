@@ -1,7 +1,7 @@
 # nrf905
 Driver for Nordic Semiconductor nRF905 transceiver.
 
-This out-of-tree kernel module. It uses SPI bus and 6 GPIOs for communicating with nRF905 chip. 
+This is out-of-tree kernel module. It uses SPI bus and 6 GPIOs for communicating with nRF905 chip. 
 
 For receiving and sending messages it creates character device /dev/nrf905.
 
