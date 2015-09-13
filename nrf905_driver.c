@@ -126,7 +126,7 @@ static ssize_t nrf905_status_show(struct device *sys_dev,
 		((long)jiffies - (long)dev->latest_msg) / HZ);
 
 	retval += scnprintf(buf + retval, PAGE_SIZE - retval,
-		"\retval: %d\n", retval);
+		"\nretval: %d\n", retval);
 
 	return retval;
 }
@@ -277,7 +277,6 @@ static ssize_t nrf905_read(struct file *filp,
 			   loff_t *f_pos)
 {
 	ssize_t retval = 0;
-//	char devno[20];
 	int wait_new_data = 1;
 
 	struct nrf905_dev_data *dev = filp->private_data;
@@ -285,9 +284,8 @@ static ssize_t nrf905_read(struct file *filp,
 	if (mutex_lock_interruptible(&dev->dev_mutex))
 		return -EINTR;
 
-//	dev_info(dev->char_dev, "read: proc: %s, PID: %d, devno: %s, count: %lu, pos: %lld\n",
-//		current->comm, current->pid, format_dev_t(devno, dev->cdev.dev),
-//		(unsigned long) count, *f_pos);
+//	dev_info(dev->char_dev, "read: proc: %s, PID: %d, count: %lu, pos: %lld\n",
+//		current->comm, current->pid, (unsigned long) count, *f_pos);
 
 	/*
 	 * For non-blocking and middle of buffer reads,
@@ -542,7 +540,6 @@ static const struct file_operations nrf905_fops = {
 static int nrf905_probe(struct spi_device *spi)
 {
 	int retval = 0;
-	struct nrf905_platform_data *p_data;
 
 	dev_info(&spi->dev, "probe\n");
 
@@ -557,15 +554,7 @@ static int nrf905_probe(struct spi_device *spi)
 
 	nrf905_dev->spi_dev = spi;
 
-	p_data = dev_get_platdata(&spi->dev);
-
-	if (!p_data) {
-		dev_err(&spi->dev, "No platform data\n");
-		retval = -EINVAL;
-		goto err;
-	}
-
-	retval = nrf905_gpio_config(nrf905_dev, p_data);
+	retval = nrf905_gpio_config(nrf905_dev);
 	if (retval < 0)
 		goto err;
 
@@ -592,7 +581,7 @@ err_init_chip:
 		nrf905_dev->chip.dataready_irq,
 		nrf905_dev);
 err_irq:
-	nrf905_gpio_release(nrf905_dev, dev_get_platdata(&spi->dev));
+	nrf905_gpio_release(nrf905_dev);
 err:
 	return retval;
 }
@@ -605,7 +594,7 @@ static int nrf905_remove(struct spi_device *spi)
 		nrf905_dev->chip.dataready_irq,
 		nrf905_dev);
 
-	nrf905_gpio_release(nrf905_dev, dev_get_platdata(&spi->dev));
+	nrf905_gpio_release(nrf905_dev);
 
 	return 0;
 }
@@ -616,10 +605,20 @@ static const struct spi_device_id nrf905_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, nrf905_id);
 
+#ifdef CONFIG_OF
+static const struct of_device_id of_nrf905_match[] = {
+	{ .compatible = "nordic,nrf905", },
+	{},
+};
+
+MODULE_DEVICE_TABLE(of, of_nrf905_match);
+#endif
+
 static struct spi_driver nrf905_driver = {
 	.driver = {
 		.name = "nrf905",
 		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(of_nrf905_match),
 	},
 	.probe = nrf905_probe,
 	.remove = nrf905_remove,
@@ -638,8 +637,8 @@ static int __init nrf905_init(void)
 		retval = register_chrdev_region(devno, NRF905_NR_DEVS,
 			"nrf905");
 	} else {
-		retval = alloc_chrdev_region(&devno, nrf905_minor, NRF905_NR_DEVS,
-			"nrf905");
+		retval = alloc_chrdev_region(&devno, nrf905_minor,
+			NRF905_NR_DEVS,	"nrf905");
 		nrf905_major = MAJOR(devno);
 	}
 	if (retval < 0) {
@@ -712,7 +711,7 @@ static int __init nrf905_init(void)
 		goto err_cdev;
 	}
 
-	pr_info("nrf905 ready: %d\n", retval);
+	pr_info("nrf905 init ready: %d\n", retval);
 	return retval;
 
 err_cdev:
@@ -767,4 +766,4 @@ module_exit(nrf905_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("NRF905 driver");
 MODULE_AUTHOR("Tero Salminen");
-MODULE_VERSION("0.1");
+MODULE_VERSION("0.2");

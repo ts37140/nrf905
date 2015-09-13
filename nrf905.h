@@ -13,6 +13,8 @@
 #include <linux/delay.h>
 #include <linux/spi/spi.h>
 #include <linux/interrupt.h>
+#include <linux/of_platform.h>
+#include <linux/of_gpio.h>
 
 #define NRF905_MAJOR		0
 #define NRF905_MINOR		0
@@ -71,9 +73,19 @@ struct nrf905_chip_conf {
 	uint8_t tx_addr[NRF905_ADDR_LEN]; /* tx address */
 };
 
+struct nrf905_gpios {
+	struct gpio_desc *data_ready;
+	struct gpio_desc *chipselect;
+	struct gpio_desc *trxce;
+	struct gpio_desc *chip_pwr;
+	struct gpio_desc *txen;
+	struct gpio_desc *carrier_detect;
+};
+
 struct nrf905_chip_data {
 	struct nrf905_chip_conf conf;
 	struct gpio_desc *control_gpio[NRF905_GPIOS];
+	struct nrf905_gpios gpios;
 	uint8_t config_reg[NRF905_CONFIG_REG_LEN];
 	uint8_t rx_payload[NRF905_PAYLOAD_LEN];
 	uint8_t tx_payload[NRF905_PAYLOAD_LEN];
@@ -109,10 +121,8 @@ struct nrf905_dev_data {
 /* Function prototypes: */
 int set_nrf905_op_mode(struct nrf905_dev_data *dev, enum nrf905_op_mode mode);
 int nrf905_init_chip(struct nrf905_dev_data *nrf905_dev);
-int nrf905_gpio_config(struct nrf905_dev_data *dev,
-		       struct nrf905_platform_data *p_data);
-void nrf905_gpio_release(struct nrf905_dev_data *nrf905_dev,
-			 struct nrf905_platform_data *p_data);
+int nrf905_gpio_config(struct nrf905_dev_data *dev);
+void nrf905_gpio_release(struct nrf905_dev_data *nrf905_dev);
 void nrf905_set_gpio(struct nrf905_dev_data *dev,
 		     enum nrf905_op_mode mode);
 void nrf905_data_ready(struct work_struct *work);

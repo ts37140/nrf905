@@ -13,4 +13,9 @@ Runtime configuration can be set via sysfs files:
 
 /sys/class/nrf905/nrf905/status: print debugging status information.
 
-I've tested the driver with Raspbian Debian Wheezy (Release date: 2015-05-05, Kernel version: 3.18). Driver expects to get GPIO configuration from platform data (nrf905_platform_data).
+I didn't get SPI communication working if I run chipselect in SPI mode (alt0). SPI communication began to work when CS pin is defined for output and controlled separately in the code.
+
+I've tested the driver with Raspbian Debian Wheezy (Release date: 2015-05-05) with kernel versions 3.18 and 4.1.6.
+
+## Platformdata and Device tree
+Driver reads GPIO configuration from platform data (nrf905_platform_data) or from device tree entry (e.g. nrf905-overlay.dts).

@@ -10,15 +10,6 @@
 
 #include "nrf905.h"
 
-enum nrf905_chip_gpios {
-	NRF905_GPIO_CSN,
-	NRF905_GPIO_DR,
-	NRF905_GPIO_CD,
-	NRF905_GPIO_PWR,
-	NRF905_GPIO_TRXCE,
-	NRF905_GPIO_TXEN,
-};
-
 void nrf905_data_ready(struct work_struct *work)
 {
 	struct nrf905_dev_data *dev =
@@ -81,6 +72,7 @@ int nrf905_wait_free_channel(struct nrf905_dev_data *dev)
 	int retval = 0;
 	int i;
 	int gpio_high;
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
 
 	dev_info(dev->char_dev, "carrier detect\n");
 
@@ -89,8 +81,7 @@ int nrf905_wait_free_channel(struct nrf905_dev_data *dev)
 	set_nrf905_op_mode(dev, NRF905_RX);
 
 	for (i = 0; i < 10; i++) {
-		gpio_high = gpiod_get_value(
-			dev->chip.control_gpio[NRF905_GPIO_CD]);
+		gpio_high = gpiod_get_value(gpios->carrier_detect);
 
 		if (!gpio_high)
 			break;
@@ -113,45 +104,158 @@ int nrf905_wait_free_channel(struct nrf905_dev_data *dev)
 void nrf905_set_gpio(struct nrf905_dev_data *dev,
 			     enum nrf905_op_mode mode)
 {
-	struct gpio_desc **gpio = dev->chip.control_gpio;
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
 
 	switch (mode) {
 	case NRF905_POWER_DOWN:
 //		dev_info(dev->char_dev, "chip NRF905_POWER_DOWN\n");
-		gpiod_set_value(gpio[NRF905_GPIO_PWR], 0);
-		gpiod_set_value(gpio[NRF905_GPIO_TRXCE], 0);
-		gpiod_set_value(gpio[NRF905_GPIO_TXEN], 0);
+		gpiod_set_value(gpios->chip_pwr, 0);
+		gpiod_set_value(gpios->trxce, 0);
+		gpiod_set_value(gpios->txen, 0);
 		break;
 	case NRF905_SPI_READY:
 //		dev_info(dev->char_dev, "chip NRF905_SPI_READY\n");
-		gpiod_set_value(gpio[NRF905_GPIO_PWR], 1);
-		gpiod_set_value(gpio[NRF905_GPIO_TRXCE], 0);
-		gpiod_set_value(gpio[NRF905_GPIO_TXEN], 0);
+		gpiod_set_value(gpios->chip_pwr, 1);
+		gpiod_set_value(gpios->trxce, 0);
+		gpiod_set_value(gpios->txen, 0);
 		break;
 	case NRF905_RX:
 //		dev_info(dev->char_dev, "chip NRF905_RX\n");
-		gpiod_set_value(gpio[NRF905_GPIO_PWR], 1);
-		gpiod_set_value(gpio[NRF905_GPIO_TRXCE], 1);
-		gpiod_set_value(gpio[NRF905_GPIO_TXEN], 0);
+		gpiod_set_value(gpios->chip_pwr, 1);
+		gpiod_set_value(gpios->trxce, 1);
+		gpiod_set_value(gpios->txen, 0);
 		break;
 	case NRF905_TX:
 //		dev_info(dev->char_dev, "chip NRF905_TX\n");
-		gpiod_set_value(gpio[NRF905_GPIO_PWR], 1);
-		gpiod_set_value(gpio[NRF905_GPIO_TRXCE], 1);
-		gpiod_set_value(gpio[NRF905_GPIO_TXEN], 1);
+		gpiod_set_value(gpios->chip_pwr, 1);
+		gpiod_set_value(gpios->trxce, 1);
+		gpiod_set_value(gpios->txen, 1);
 		break;
 	/* nothing for default */
 	}
 }
 
-int nrf905_gpio_config(struct nrf905_dev_data *dev,
+static void nrf905_gpio_release_of(struct nrf905_dev_data *dev)
+{
+	struct device *spi_dev = &dev->spi_dev->dev;
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
+
+	if (gpios->data_ready)
+		devm_gpiod_put(spi_dev, gpios->data_ready);
+	if (gpios->chipselect)
+		devm_gpiod_put(spi_dev, gpios->chipselect);
+	if (gpios->trxce)
+		devm_gpiod_put(spi_dev, gpios->trxce);
+	if (gpios->chip_pwr)
+		devm_gpiod_put(spi_dev, gpios->chip_pwr);
+	if (gpios->txen)
+		devm_gpiod_put(spi_dev, gpios->txen);
+	if (gpios->carrier_detect)
+		devm_gpiod_put(spi_dev, gpios->carrier_detect);
+}
+
+static void nrf905_gpio_release_pdata(struct nrf905_dev_data *dev,
+		     struct nrf905_platform_data *p_data)
+{
+	struct gpio ctrl_gpios[] = {
+		{ p_data->gpio_csn, GPIOF_OUT_INIT_HIGH, "NRF905 CS" },
+		{ p_data->gpio_dr, GPIOF_IN, "NRF905 DR" },
+		{ p_data->gpio_cd, GPIOF_IN, "NRF905 CD" },
+		{ p_data->gpio_pwr, GPIOF_OUT_INIT_LOW, "NRF905 PWR" },
+		{ p_data->gpio_trxce, GPIOF_OUT_INIT_LOW, "NRF905 TRXCE" },
+		{ p_data->gpio_txen, GPIOF_OUT_INIT_LOW, "NRF905 TXEN" },
+	};
+
+	gpio_free_array(ctrl_gpios, ARRAY_SIZE(ctrl_gpios));
+}
+
+void nrf905_gpio_release(struct nrf905_dev_data *dev)
+{
+	struct nrf905_platform_data *p_data =
+		dev_get_platdata(&dev->spi_dev->dev);
+
+	if (p_data)
+		nrf905_gpio_release_pdata(dev, p_data);
+	else
+		nrf905_gpio_release_of(dev);
+}
+
+static int nrf905_gpio_config_of(struct nrf905_dev_data *dev)
+{
+	int retval = 0;
+	struct device *spi_dev = &dev->spi_dev->dev;
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
+
+	/*  chip_pwr, trxce & txen will init nRF905 to power down mode */
+	gpios->chip_pwr = devm_gpiod_get(spi_dev, "chip_pwr", GPIOD_OUT_LOW);
+	if (IS_ERR(gpios->chip_pwr)) {
+		retval = PTR_ERR(gpios->chip_pwr);
+		gpios->chip_pwr = NULL;
+		dev_err(spi_dev, "can't get gpio chip_pwr: %d\n", retval);
+		goto err;
+	}
+	gpios->trxce = devm_gpiod_get(spi_dev, "trxce", GPIOD_OUT_LOW);
+	if (IS_ERR(gpios->trxce)) {
+		retval = PTR_ERR(gpios->trxce);
+		gpios->trxce = NULL;
+		dev_err(spi_dev, "can't get gpio trxce: %d\n", retval);
+		goto err;
+	}
+	gpios->txen = devm_gpiod_get(spi_dev, "txen", GPIOD_OUT_LOW);
+	if (IS_ERR(gpios->txen)) {
+		retval = PTR_ERR(gpios->txen);
+		gpios->txen = NULL;
+		dev_err(spi_dev, "can't get gpio txen: %d\n", retval);
+		goto err;
+	}
+
+	gpios->data_ready = devm_gpiod_get(spi_dev, "data_ready", GPIOD_IN);
+	if (IS_ERR(gpios->data_ready)) {
+		retval = PTR_ERR(gpios->data_ready);
+		gpios->data_ready = NULL;
+		dev_err(spi_dev, "can't get gpio data_ready: %d\n", retval);
+		goto err;
+	}
+
+	/* SPI not working with NRF905 if chipselect-pin run in SPI mode*/
+	gpios->chipselect = devm_gpiod_get(spi_dev, "chipselect",
+		GPIOD_OUT_HIGH);
+	if (IS_ERR(gpios->chipselect)) {
+		retval = PTR_ERR(gpios->chipselect);
+		gpios->chipselect = NULL;
+		dev_err(spi_dev, "can't get gpio chipselect: %d\n", retval);
+		goto err;
+	}
+
+	gpios->carrier_detect = devm_gpiod_get(spi_dev, "carrier_detect",
+		GPIOD_IN);
+	if (IS_ERR(gpios->carrier_detect)) {
+		retval = PTR_ERR(gpios->carrier_detect);
+		gpios->carrier_detect = NULL;
+		dev_err(spi_dev, "can't get gpio carrier_detect: %d\n", retval);
+		goto err;
+	}
+
+	return retval;
+err:
+	nrf905_gpio_release_of(dev);
+	return retval;
+
+}
+
+#define GPIO_DESC_ERROR(dev, ctrl, str)	{			\
+	if (IS_ERR(ctrl)) {					\
+		dev_info(dev, "can not get gpio %s: %ld\n",	\
+			str, PTR_ERR(ctrl));			\
+		retval = PTR_ERR(ctrl);				\
+		goto err;					\
+	} }
+static int nrf905_gpio_config_pdata(struct nrf905_dev_data *dev,
 			      struct nrf905_platform_data *p_data)
 {
 	int retval = 0;
-	int i;
-	int irq;
-
-	struct gpio_desc *ctrl;
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
+	struct device *spi_dev = &dev->spi_dev->dev;
 
 	/* this will init nRF905 to power down mode */
 	struct gpio ctrl_gpios[] = {
@@ -165,50 +269,28 @@ int nrf905_gpio_config(struct nrf905_dev_data *dev,
 
 	retval = gpio_request_array(ctrl_gpios, ARRAY_SIZE(ctrl_gpios));
 	if (retval) {
-		dev_err(dev->char_dev, "failed to request GPIOs: %d\n", retval);
+		dev_err(spi_dev, "failed to request GPIOs: %d\n", retval);
 		return retval;
 	}
 
-	for (i = 0; i < NRF905_GPIOS; i++) {
-		switch (i) {
-		case NRF905_GPIO_CSN:
-			ctrl = gpio_to_desc(p_data->gpio_csn);
-			break;
-		case NRF905_GPIO_DR:
-			ctrl = gpio_to_desc(p_data->gpio_dr);
-			break;
-		case NRF905_GPIO_CD:
-			ctrl = gpio_to_desc(p_data->gpio_cd);
-			break;
-		case NRF905_GPIO_PWR:
-			ctrl = gpio_to_desc(p_data->gpio_pwr);
-			break;
-		case NRF905_GPIO_TRXCE:
-			ctrl = gpio_to_desc(p_data->gpio_trxce);
-			break;
-		case NRF905_GPIO_TXEN:
-			ctrl = gpio_to_desc(p_data->gpio_txen);
-			break;
-		}
-		if (IS_ERR_OR_NULL(ctrl)) {
-			dev_info(dev->char_dev, "can not get gpio %d: %ld\n",
-				i, PTR_ERR(ctrl));
-			retval = PTR_ERR(ctrl);
-			goto err;
-		}
+	gpios->chip_pwr = gpio_to_desc(p_data->gpio_pwr);
+	GPIO_DESC_ERROR(spi_dev, gpios->chip_pwr, "pwr");
 
-		dev->chip.control_gpio[i] = ctrl;
-	}
+	gpios->trxce = gpio_to_desc(p_data->gpio_trxce);
+	GPIO_DESC_ERROR(spi_dev, gpios->trxce, "trxce");
 
-	irq = gpiod_to_irq(dev->chip.control_gpio[NRF905_GPIO_DR]);
+	gpios->txen = gpio_to_desc(p_data->gpio_txen);
+	GPIO_DESC_ERROR(spi_dev, gpios->txen, "txen");
 
-	if (irq < 0) {
-		dev_info(dev->char_dev, "can not get GPIO irq: %d\n", irq);
-		retval = irq;
-		goto err;
-	}
+	gpios->data_ready = gpio_to_desc(p_data->gpio_dr);
+	GPIO_DESC_ERROR(spi_dev, gpios->data_ready, "dr");
 
-	dev->chip.dataready_irq = irq;
+	gpios->carrier_detect = gpio_to_desc(p_data->gpio_cd);
+	GPIO_DESC_ERROR(spi_dev, gpios->carrier_detect, "cd");
+
+	/* SPI communication not working if CS-pin run in SPI mode*/
+	gpios->chipselect = gpio_to_desc(p_data->gpio_csn);
+	GPIO_DESC_ERROR(spi_dev, gpios->chipselect, "cs");
 
 	return retval;
 
@@ -219,19 +301,49 @@ err:
 
 }
 
-void nrf905_gpio_release(struct nrf905_dev_data *dev,
-		     struct nrf905_platform_data *p_data)
+int nrf905_gpio_config(struct nrf905_dev_data *dev)
 {
-	struct gpio ctrl_gpios[] = {
-		{ p_data->gpio_csn, GPIOF_OUT_INIT_HIGH, "NRF905 CS" },
-		{ p_data->gpio_dr, GPIOF_IN, "NRF905 DR" },
-		{ p_data->gpio_cd, GPIOF_IN, "NRF905 CD" },
-		{ p_data->gpio_pwr, GPIOF_OUT_INIT_LOW, "NRF905 PWR" },
-		{ p_data->gpio_trxce, GPIOF_OUT_INIT_LOW, "NRF905 TRXCE" },
-		{ p_data->gpio_txen, GPIOF_OUT_INIT_LOW, "NRF905 TXEN" },
-	};
+	int retval = 0;
+	struct nrf905_platform_data *p_data =
+		dev_get_platdata(&dev->spi_dev->dev);
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
+	struct device *spi_dev = &dev->spi_dev->dev;
+	int irq;
 
-	gpio_free_array(ctrl_gpios, ARRAY_SIZE(ctrl_gpios));
+	dev_info(spi_dev, "GPIO config\n");
+
+	if (p_data) {
+		dev_info(spi_dev, "Init with platformdata\n");
+		retval = nrf905_gpio_config_pdata(dev, p_data);
+	} else {
+		dev_info(spi_dev, "No platform data.\n");
+
+		if (dev->spi_dev->dev.of_node == NULL) {
+			dev_err(spi_dev, "Devicetree not found\n");
+			retval = -ENODEV;
+			goto err;
+		}
+
+		dev_info(spi_dev, "Devicetree entry found.\n");
+
+		retval = nrf905_gpio_config_of(dev);
+	}
+
+	if (retval < 0)
+		goto err;
+
+	irq = gpiod_to_irq(gpios->data_ready);
+
+	if (irq < 0) {
+		dev_err(spi_dev, "can not get GPIO irq: %d\n", irq);
+		retval = irq;
+		goto err;
+	}
+	dev_info(spi_dev, "dataready irq: %d\n", irq);
+
+	dev->chip.dataready_irq = irq;
+err:
+	return retval;
 }
 
 static void nrf905_set_config_data(struct nrf905_dev_data *dev)
@@ -331,15 +443,15 @@ static void nrf905_free_spi_buffers(struct nrf905_dev_data *dev,
 }
 
 static int nrf905_spi_send_cmd(struct nrf905_dev_data *dev,
-				uint8_t cmd,
-				int len,
-				uint8_t *rx_data,
-				uint8_t *tx_data)
+			       uint8_t cmd,
+			       int len,
+			       uint8_t *rx_data,
+			       uint8_t *tx_data)
 {
 	int retval = 0;
 	struct spi_transfer spi_t;
 	struct spi_message msg;
-
+	struct nrf905_gpios *gpios = &dev->chip.gpios;
 
 	if (len > NRF905_PAYLOAD_LEN)
 		len = NRF905_PAYLOAD_LEN;
@@ -362,7 +474,7 @@ static int nrf905_spi_send_cmd(struct nrf905_dev_data *dev,
 	spi_message_init(&msg);
 	spi_message_add_tail(&spi_t, &msg);
 
-	gpiod_set_value(dev->chip.control_gpio[NRF905_GPIO_CSN], 0);
+	gpiod_set_value(gpios->chipselect, 0);
 
 	retval = spi_sync(dev->spi_dev, &msg);
 	if (retval < 0) {
@@ -370,7 +482,7 @@ static int nrf905_spi_send_cmd(struct nrf905_dev_data *dev,
 		goto err;
 	}
 
-	gpiod_set_value(dev->chip.control_gpio[NRF905_GPIO_CSN], 1);
+	gpiod_set_value(gpios->chipselect, 1);
 
 //	dev_info(dev->char_dev, "spi transfer buffers:\n");
 //	print_hex_dump_bytes("rx:", DUMP_PREFIX_NONE, spi_t.rx_buf, spi_t.len);
@@ -392,7 +504,7 @@ static int nrf905_read_and_verify_chip_reg(struct nrf905_dev_data *dev)
 	int retval = 0;
 	uint8_t *reg = dev->chip.config_reg;
 
-	dev_info(dev->char_dev, "verify chip configuration register\n");
+	dev_info(dev->char_dev, "verify chip configuration register and SPI communication\n");
 
 	memset(dev->chip.rx_payload, 0, NRF905_PAYLOAD_LEN);
 
@@ -454,7 +566,6 @@ int nrf905_init_chip(struct nrf905_dev_data *dev)
 out:
 	return retval;
 }
-
 
 int nrf905_read_chip_rx_buf(struct nrf905_dev_data *dev)
 {
